@@ -61,6 +61,22 @@ func TestGoReflectSet(t *testing.T) {
 	if o.Y != "2P" {
 		t.Fatalf("Unexpected Y: %s", o.Y)
 	}
+
+	r.Set("o", o)
+	_, err = r.RunString(SCRIPT)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res, ok := r.Get("o").Export().(O); ok {
+		if res.X != 6 {
+			t.Fatalf("Unexpected res.X: %d", res.X)
+		}
+
+		if res.Y != "2PP" {
+			t.Fatalf("Unexpected res.Y: %s", res.Y)
+		}
+	}
 }
 
 func TestGoReflectEnumerate(t *testing.T) {
@@ -618,7 +634,7 @@ func TestNonStructAnonFields(t *testing.T) {
 	`
 	vm := New()
 	vm.SetFieldNameMapper(fieldNameMapper1{})
-	vm.Set("a", &Test2{Test1: &Test1{M: true}, Test4: []int{1, 2}})
+	vm.Set("a", &Test2{Test1: &Test1{M: true}, Test4: []int{1, 2}, test3: nil})
 	v, err := vm.RunString(SCRIPT)
 	if err != nil {
 		t.Fatal(err)
@@ -636,25 +652,17 @@ func TestStructNonAddressable(t *testing.T) {
 	const SCRIPT = `
 	"use strict";
 	
-	if (Object.getOwnPropertyDescriptor(s, "Field").writable) {
-		throw new Error("Field is writable");
+	if (!Object.getOwnPropertyDescriptor(s, "Field").writable) {
+		throw new Error("s.Field is non-writable");
 	}
 
 	if (!Object.getOwnPropertyDescriptor(s1, "Field").writable) {
-		throw new Error("Field is non-writable");
+		throw new Error("s1.Field is non-writable");
 	}
 
 	s1.Field = 42;
-
-	var result;
-	try {
-		s.Field = 42;
-		result = false;
-	} catch (e) {
-		result = e instanceof TypeError;
-	}
-	
-	result;
+	s.Field = 43;
+	s;
 `
 
 	var s S
@@ -665,8 +673,13 @@ func TestStructNonAddressable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !v.StrictEquals(valueTrue) {
-		t.Fatalf("Unexpected result: %v", v)
+	exp := v.Export()
+	if s1, ok := exp.(S); ok {
+		if s1.Field != 43 {
+			t.Fatal(s1)
+		}
+	} else {
+		t.Fatalf("Wrong type: %T", exp)
 	}
 	if s.Field != 42 {
 		t.Fatalf("Unexpected s.Field value: %d", s.Field)
@@ -787,7 +800,7 @@ func TestDefinePropertyUnexportedJsName(t *testing.T) {
 
 	vm := New()
 	vm.SetFieldNameMapper(fieldNameMapper1{})
-	vm.Set("f", &T{})
+	vm.Set("f", &T{unexported: 0})
 
 	_, err := vm.RunString(`
 	"use strict";
@@ -857,7 +870,7 @@ func BenchmarkGoReflectGet(b *testing.B) {
 
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		v := vm.ToValue(child{parent: parent{Test: "Test"}}).(*Object)
+		v := vm.ToValue(child{parent: parent{Test: "Test", field: ""}}).(*Object)
 		v.Get("Test")
 	}
 }
@@ -877,20 +890,11 @@ func TestNestedStructSet(t *testing.T) {
 		throw new Error("a1.B.Field = " + a1.B.Field);
 	}
 	var d = Object.getOwnPropertyDescriptor(a1.B, "Field");
-	if (d.writable) {
-		throw new Error("a1.B is writable");
+	if (!d.writable) {
+		throw new Error("a1.B is not writable");
 	}
-	var thrown = false;
-	try {
-		a1.B.Field = 42;
-	} catch (e) {
-		if (e instanceof TypeError) {
-			thrown = true;
-		}
-	}
-	if (!thrown) {
-		throw new Error("TypeError was not thrown");
-	}
+	a1.B.Field = 42;
+	a1;
 	`
 	a := A{
 		B: B{
@@ -900,9 +904,17 @@ func TestNestedStructSet(t *testing.T) {
 	vm := New()
 	vm.Set("a", &a)
 	vm.Set("a1", a)
-	_, err := vm.RunString(SCRIPT)
+	v, err := vm.RunString(SCRIPT)
 	if err != nil {
 		t.Fatal(err)
+	}
+	exp := v.Export()
+	if v, ok := exp.(A); ok {
+		if v.B.Field != 42 {
+			t.Fatal(v)
+		}
+	} else {
+		t.Fatalf("Wrong type: %T", exp)
 	}
 
 	if v := a.B.Field; v != 2 {
@@ -1186,5 +1198,49 @@ func TestGoReflectPreserveType(t *testing.T) {
 	`)
 	if e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestGoReflectCopyOnWrite(t *testing.T) {
+	type Inner struct {
+		Field int
+	}
+	type S struct {
+		I Inner
+	}
+	var s S
+	s.I.Field = 1
+
+	vm := New()
+	vm.Set("s", &s)
+	_, err := vm.RunString(`
+		if (s.I.Field !== 1) {
+			throw new Error("s.I.Field: " + s.I.Field);
+		}
+
+		let tmp = s.I; // tmp becomes a reference to s.I
+		if (tmp.Field !== 1) {
+			throw new Error("tmp.Field: " + tmp.Field);
+		}
+
+		s.I.Field = 2;
+		if (s.I.Field !== 2) {
+			throw new Error("s.I.Field (1): " + s.I.Field);
+		}
+		if (tmp.Field !== 2) {
+			throw new Error("tmp.Field (1): " + tmp.Field);
+		}
+
+		s.I = {Field: 3}; // at this point tmp is changed to a copy
+		if (s.I.Field !== 3) {
+			throw new Error("s.I.Field (2): " + s.I.Field);
+		}
+		if (tmp.Field !== 2) {
+			throw new Error("tmp.Field (2): " + tmp.Field);
+		}
+	`)
+
+	if err != nil {
+		t.Fatal(err)
 	}
 }

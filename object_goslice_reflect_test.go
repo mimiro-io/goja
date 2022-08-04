@@ -1,6 +1,7 @@
 package goja
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -109,6 +110,54 @@ func TestGoSliceReflectPush(t *testing.T) {
 		}
 	})
 
+}
+
+func TestGoSliceReflectStructField(t *testing.T) {
+	vm := New()
+	var s struct {
+		A []int
+		B *[]int
+	}
+	vm.Set("s", &s)
+	_, err := vm.RunString(`
+		'use strict';
+		s.A.push(1);
+		if (s.B !== null) {
+			throw new Error("s.B is not null: " + s.B);
+		}
+		s.B = [2];
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.A) != 1 || s.A[0] != 1 {
+		t.Fatalf("s.A: %v", s.A)
+	}
+	if len(*s.B) != 1 || (*s.B)[0] != 2 {
+		t.Fatalf("s.B: %v", *s.B)
+	}
+}
+
+func TestGoSliceReflectExportToStructField(t *testing.T) {
+	vm := New()
+	v, err := vm.RunString(`({A: [1], B: [2]})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		A []int
+		B *[]int
+	}
+	err = vm.ExportTo(v, &s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.A) != 1 || s.A[0] != 1 {
+		t.Fatalf("s.A: %v", s.A)
+	}
+	if len(*s.B) != 1 || (*s.B)[0] != 2 {
+		t.Fatalf("s.B: %v", *s.B)
+	}
 }
 
 func TestGoSliceReflectProtoMethod(t *testing.T) {
@@ -368,5 +417,79 @@ func TestGoSliceReflectMethods(t *testing.T) {
 	`)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGoSliceReflectExportAfterGrow(t *testing.T) {
+	vm := New()
+	vm.Set("a", []int{1})
+	v, err := vm.RunString(`
+		a.push(2);
+		a;
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := v.Export()
+	if a, ok := exp.([]int); ok {
+		if len(a) != 2 || a[0] != 1 || a[1] != 2 {
+			t.Fatal(a)
+		}
+	} else {
+		t.Fatalf("Wrong type: %T", exp)
+	}
+}
+
+func TestGoSliceReflectSort(t *testing.T) {
+	vm := New()
+	type Thing struct{ Name string }
+	vm.Set("v", []*Thing{
+		{Name: "log"},
+		{Name: "etc"},
+		{Name: "test"},
+		{Name: "bin"},
+	})
+	ret, err := vm.RunString(`
+//v.sort((a, b) => a.Name.localeCompare(b.Name)).map((x) => x.Name);
+	const tmp = v[0];
+	v[0] = v[1];
+	v[1] = tmp;
+	v[0].Name + v[1].Name;
+`)
+	if err != nil {
+		panic(err)
+	}
+	t.Log(ret.Export())
+}
+
+func TestGoSliceReflect111(t *testing.T) {
+	vm := New()
+	vm.Set("v", []int32{
+		1, 2,
+	})
+	ret, err := vm.RunString(`
+//v.sort((a, b) => a.Name.localeCompare(b.Name)).map((x) => x.Name);
+	const tmp = v[0];
+	v[0] = v[1];
+	v[1] = tmp;
+	"" + v[0] + v[1];
+`)
+	if err != nil {
+		panic(err)
+	}
+	t.Log(ret.Export())
+	a := []int{1, 2}
+	a0 := reflect.ValueOf(a).Index(0)
+	a0.Set(reflect.ValueOf(0))
+	t.Log(a[0])
+}
+
+func BenchmarkGoSliceReflectSet(b *testing.B) {
+	vm := New()
+	a := vm.ToValue([]int{1}).(*Object)
+	b.ResetTimer()
+	v := intToValue(0)
+	for i := 0; i < b.N; i++ {
+		a.Set("0", v)
 	}
 }

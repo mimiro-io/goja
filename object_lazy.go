@@ -253,6 +253,18 @@ func (o *lazyObject) exportType() reflect.Type {
 	return obj.exportType()
 }
 
+func (o *lazyObject) exportToMap(m reflect.Value, typ reflect.Type, ctx *objectExportCtx) error {
+	obj := o.create(o.val)
+	o.val.self = obj
+	return obj.exportToMap(m, typ, ctx)
+}
+
+func (o *lazyObject) exportToArrayOrSlice(s reflect.Value, typ reflect.Type, ctx *objectExportCtx) error {
+	obj := o.create(o.val)
+	o.val.self = obj
+	return obj.exportToArrayOrSlice(s, typ, ctx)
+}
+
 func (o *lazyObject) equal(other objectImpl) bool {
 	obj := o.create(o.val)
 	o.val.self = obj
@@ -283,19 +295,25 @@ func (o *lazyObject) setProto(proto *Object, throw bool) bool {
 	return obj.setProto(proto, throw)
 }
 
-func (o *lazyObject) sortLen() int64 {
+func (o *lazyObject) getPrivateEnv(typ *privateEnvType, create bool) *privateElements {
+	obj := o.create(o.val)
+	o.val.self = obj
+	return obj.getPrivateEnv(typ, create)
+}
+
+func (o *lazyObject) sortLen() int {
 	obj := o.create(o.val)
 	o.val.self = obj
 	return obj.sortLen()
 }
 
-func (o *lazyObject) sortGet(i int64) Value {
+func (o *lazyObject) sortGet(i int) Value {
 	obj := o.create(o.val)
 	o.val.self = obj
 	return obj.sortGet(i)
 }
 
-func (o *lazyObject) swap(i, j int64) {
+func (o *lazyObject) swap(i int, j int) {
 	obj := o.create(o.val)
 	o.val.self = obj
 	obj.swap(i, j)
