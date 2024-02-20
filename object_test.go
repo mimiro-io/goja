@@ -495,6 +495,21 @@ func ExampleObject_Delete() {
 	// Output: before: true, after: <nil>
 }
 
+func TestObjectEquality(t *testing.T) {
+	type CustomInt int
+	type S struct {
+		F CustomInt
+	}
+	vm := New()
+	vm.Set("s", S{})
+	// indexOf() and includes() use different equality checks (StrictEquals and SameValueZero respectively),
+	// but for objects they must behave the same. De-referencing s.F creates a new wrapper each time.
+	vm.testScriptWithTestLib(`
+	assert.sameValue([s.F].indexOf(s.F), 0, "indexOf");
+	assert([s.F].includes(s.F));
+	`, _undefined, t)
+}
+
 func BenchmarkPut(b *testing.B) {
 	v := &Object{}
 
@@ -604,7 +619,7 @@ func BenchmarkConv(b *testing.B) {
 }
 
 func BenchmarkToUTF8String(b *testing.B) {
-	var s valueString = asciiString("test")
+	var s String = asciiString("test")
 	for i := 0; i < b.N; i++ {
 		_ = s.String()
 	}
@@ -633,9 +648,9 @@ func BenchmarkAddString(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		var z Value
-		if xi, ok := x.(valueString); ok {
-			if yi, ok := y.(valueString); ok {
-				z = xi.concat(yi)
+		if xi, ok := x.(String); ok {
+			if yi, ok := y.(String); ok {
+				z = xi.Concat(yi)
 			}
 		}
 		if !z.StrictEquals(tst) {

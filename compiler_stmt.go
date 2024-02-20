@@ -127,11 +127,10 @@ func (c *compiler) compileTryStatement(v *ast.TryStatement, needResult bool) {
 		c.emit(clearResult)
 	}
 	c.compileBlockStatement(v.Body, bodyNeedResult)
-	c.emit(halt)
-	lbl2 := len(c.p.code)
-	c.emit(nil)
 	var catchOffset int
 	if v.Catch != nil {
+		lbl2 := len(c.p.code) // jump over the catch block
+		c.emit(nil)
 		catchOffset = len(c.p.code) - lbl
 		if v.Catch.Parameter != nil {
 			c.block = &block{
@@ -183,23 +182,21 @@ func (c *compiler) compileTryStatement(v *ast.TryStatement, needResult bool) {
 			c.emit(pop)
 			c.compileBlockStatement(v.Catch.Body, bodyNeedResult)
 		}
-		c.emit(halt)
+		c.p.code[lbl2] = jump(len(c.p.code) - lbl2)
 	}
 	var finallyOffset int
 	if v.Finally != nil {
-		lbl1 := len(c.p.code)
-		c.emit(nil)
-		finallyOffset = len(c.p.code) - lbl
+		c.emit(enterFinally{})
+		finallyOffset = len(c.p.code) - lbl // finallyOffset should not include enterFinally
 		if bodyNeedResult && finallyBreaking != nil && lp == -1 {
 			c.emit(clearResult)
 		}
 		c.compileBlockStatement(v.Finally, false)
-		c.emit(halt, retFinally)
-
-		c.p.code[lbl1] = jump(len(c.p.code) - lbl1)
+		c.emit(leaveFinally{})
+	} else {
+		c.emit(leaveTry{})
 	}
 	c.p.code[lbl] = try{catchOffset: int32(catchOffset), finallyOffset: int32(finallyOffset)}
-	c.p.code[lbl2] = jump(len(c.p.code) - lbl2)
 	c.leaveBlock()
 }
 
@@ -624,11 +621,14 @@ func (c *compiler) emitBlockExitCode(label *ast.Identifier, idx file.Idx, isBrea
 		c.throwSyntaxError(int(idx)-1, "Could not find block")
 		panic("unreachable")
 	}
+	contForLoop := !isBreak && block.typ == blockLoop
 L:
 	for b := c.block; b != block; b = b.outer {
 		switch b.typ {
 		case blockIterScope:
-			if !isBreak && b.outer == block {
+			// blockIterScope in 'for' loops is shared across iterations, so
+			// continue should not pop it.
+			if contForLoop && b.outer == block {
 				break L
 			}
 			fallthrough
@@ -636,7 +636,7 @@ L:
 			b.breaks = append(b.breaks, len(c.p.code))
 			c.emit(nil)
 		case blockTry:
-			c.emit(halt)
+			c.emit(leaveTry{})
 		case blockWith:
 			c.emit(leaveWith)
 		case blockLoopEnum:
@@ -660,7 +660,7 @@ func (c *compiler) compileContinue(label *ast.Identifier, idx file.Idx) {
 
 func (c *compiler) compileIfBody(s ast.Statement, needResult bool) {
 	if !c.scope.strict {
-		if s, ok := s.(*ast.FunctionDeclaration); ok {
+		if s, ok := s.(*ast.FunctionDeclaration); ok && !s.Function.Async && !s.Function.Generator {
 			c.compileFunction(s)
 			if needResult {
 				c.emit(clearResult)
@@ -739,7 +739,7 @@ func (c *compiler) compileReturnStatement(v *ast.ReturnStatement) {
 	for b := c.block; b != nil; b = b.outer {
 		switch b.typ {
 		case blockTry:
-			c.emit(halt)
+			c.emit(leaveTry{})
 		case blockLoopEnum:
 			c.emit(enumPopClose)
 		}

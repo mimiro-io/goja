@@ -211,7 +211,7 @@ func TestRecursiveRun(t *testing.T) {
 	// corruptions occur.
 	vm := New()
 	vm.Set("f", func() (Value, error) {
-		return vm.RunString("let x = 1; { let z = 100, z1 = 200, z2 = 300, z3 = 400; } x;")
+		return vm.RunString("let x = 1; { let z = 100, z1 = 200, z2 = 300, z3 = 400; x = x + z3} x;")
 	})
 	res, err := vm.RunString(`
 	function f1() {
@@ -230,6 +230,48 @@ func TestRecursiveRun(t *testing.T) {
 		}
 	};
 	f1();
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.SameAs(valueInt(401)) {
+		t.Fatal(res)
+	}
+}
+
+func TestRecursiveRunWithNArgs(t *testing.T) {
+	vm := New()
+	vm.Set("f", func() (Value, error) {
+		return vm.RunString(`
+		{
+			let a = 0;
+			let b = 1;
+			a = 2; // this used to to corrupt b, because its location on the stack was off by vm.args (1 in our case)
+			b;
+		}
+	`)
+	})
+	_, err := vm.RunString(`
+		(function(arg) { // need an ES function call with an argument to set vm.args
+			let res = f();
+			if (res !== 1) {
+				throw new Error(res);
+			}
+		})(123);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecursiveRunCallee(t *testing.T) {
+	// Make sure that a recursive call to Run*() correctly sets the callee (i.e. stack[sb-1])
+	vm := New()
+	vm.Set("f", func() (Value, error) {
+		return vm.RunString("this; (() => 1)()")
+	})
+	res, err := vm.RunString(`
+		f(123, 123);
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -356,18 +398,44 @@ func TestArgsKeys(t *testing.T) {
 
 func TestIPowOverflow(t *testing.T) {
 	const SCRIPT = `
-	Math.pow(65536, 6)
+	assert.sameValue(Math.pow(65536, 6), 7.922816251426434e+28);
+	assert.sameValue(Math.pow(10, 19), 1e19);
+	assert.sameValue(Math.pow(2097151, 3), 9223358842721534000);
+	assert.sameValue(Math.pow(2097152, 3), 9223372036854776000);
+	assert.sameValue(Math.pow(-2097151, 3), -9223358842721534000);
+	assert.sameValue(Math.pow(-2097152, 3), -9223372036854776000);
+	assert.sameValue(Math.pow(9007199254740992, 0), 1);
+	assert.sameValue(Math.pow(-9007199254740992, 0), 1);
+	assert.sameValue(Math.pow(0, 0), 1);
 	`
 
-	testScript(SCRIPT, floatToValue(7.922816251426434e+28), t)
+	testScriptWithTestLib(SCRIPT, _undefined, t)
 }
 
-func TestIPowZero(t *testing.T) {
-	const SCRIPT = `
-	Math.pow(0, 0)
-	`
+func TestIPow(t *testing.T) {
+	if res := ipow(-9223372036854775808, 1); res != -9223372036854775808 {
+		t.Fatal(res)
+	}
 
-	testScript(SCRIPT, intToValue(1), t)
+	if res := ipow(9223372036854775807, 1); res != 9223372036854775807 {
+		t.Fatal(res)
+	}
+
+	if res := ipow(-9223372036854775807, 1); res != -9223372036854775807 {
+		t.Fatal(res)
+	}
+
+	if res := ipow(9223372036854775807, 0); res != 1 {
+		t.Fatal(res)
+	}
+
+	if res := ipow(-9223372036854775807, 0); res != 1 {
+		t.Fatal(res)
+	}
+
+	if res := ipow(-9223372036854775808, 0); res != 1 {
+		t.Fatal(res)
+	}
 }
 
 func TestInterrupt(t *testing.T) {
@@ -1037,7 +1105,7 @@ func TestToValueNil(t *testing.T) {
 	}
 
 	var ar []interface{}
-	if v := vm.ToValue(ar); !IsNull(v) {
+	if v := vm.ToValue(ar); IsNull(v) {
 		t.Fatalf("[]interface{}: %v", v)
 	}
 
@@ -1612,6 +1680,65 @@ func TestInterruptInWrappedFunction2Recover(t *testing.T) {
 	s := rt.Get("S")
 	if s == nil || s.ToInteger() != 5 {
 		t.Fatalf("Wrong value for S %v", s)
+	}
+}
+
+func TestInterruptInWrappedFunctionExpectInteruptError(t *testing.T) {
+	rt := New()
+	// this test panics as otherwise goja will recover and possibly loop
+	rt.Set("v", rt.ToValue(func() {
+		rt.Interrupt("here is the error")
+	}))
+
+	rt.Set("s", rt.ToValue(func(a Callable) (Value, error) {
+		return a(nil)
+	}))
+
+	_, err := rt.RunString(`
+        s(() =>{
+            v();
+        })
+	`)
+	if err == nil {
+		t.Fatal("expected error but got no error")
+	}
+	var intErr *InterruptedError
+	if !errors.As(err, &intErr) {
+		t.Fatalf("Wrong error type: %T", err)
+	}
+	if !strings.Contains(intErr.Error(), "here is the error") {
+		t.Fatalf("Wrong error message: %q", intErr.Error())
+	}
+}
+
+func TestInterruptInWrappedFunctionExpectStackOverflowError(t *testing.T) {
+	rt := New()
+	rt.SetMaxCallStackSize(5)
+	// this test panics as otherwise goja will recover and possibly loop
+	rt.Set("v", rt.ToValue(func() {
+		_, err := rt.RunString(`
+		(function loop() { loop() })();
+		`)
+		if err != nil {
+			panic(err)
+		}
+	}))
+
+	rt.Set("s", rt.ToValue(func(a Callable) (Value, error) {
+		return a(nil)
+	}))
+
+	_, err := rt.RunString(`
+        s(() =>{
+            v();
+        })
+	`)
+	if err == nil {
+		t.Fatal("expected error but got no error")
+	}
+	var soErr *StackOverflowError
+	if !errors.As(err, &soErr) {
+		t.Fatalf("Wrong error type: %T", err)
 	}
 }
 
@@ -2198,15 +2325,32 @@ func TestStacktraceLocationThrowFromCatch(t *testing.T) {
 		t.Fatal("Expected error")
 	}
 	stack := err.(*Exception).stack
-	if len(stack) != 2 {
+	if len(stack) != 3 {
 		t.Fatalf("Unexpected stack len: %v", stack)
 	}
-	if frame := stack[0]; frame.funcName != "main" || frame.pc != 30 {
+	if frame := stack[0]; frame.funcName != "f2" || frame.pc != 2 {
 		t.Fatalf("Unexpected stack frame 0: %#v", frame)
 	}
-	if frame := stack[1]; frame.funcName != "" || frame.pc != 7 {
+	if frame := stack[1]; frame.funcName != "main" || frame.pc != 15 {
 		t.Fatalf("Unexpected stack frame 1: %#v", frame)
 	}
+	if frame := stack[2]; frame.funcName != "" || frame.pc != 7 {
+		t.Fatalf("Unexpected stack frame 2: %#v", frame)
+	}
+}
+
+func TestErrorStackRethrow(t *testing.T) {
+	const SCRIPT = `
+	function f(e) {
+		throw e;
+	}
+	try {
+		f(new Error());
+	} catch(e) {
+		assertStack(e, [["test.js", "", 6, 5]]);
+	}
+	`
+	testScriptWithTestLibX(SCRIPT, _undefined, t)
 }
 
 func TestStacktraceLocationThrowFromGo(t *testing.T) {
@@ -2235,7 +2379,7 @@ func TestStacktraceLocationThrowFromGo(t *testing.T) {
 	if frame := stack[0]; !strings.HasSuffix(frame.funcName.String(), "TestStacktraceLocationThrowFromGo.func1") {
 		t.Fatalf("Unexpected stack frame 0: %#v", frame)
 	}
-	if frame := stack[1]; frame.funcName != "callee" || frame.pc != 1 {
+	if frame := stack[1]; frame.funcName != "callee" || frame.pc != 2 {
 		t.Fatalf("Unexpected stack frame 1: %#v", frame)
 	}
 	if frame := stack[2]; frame.funcName != "main" || frame.pc != 6 {
@@ -2243,6 +2387,59 @@ func TestStacktraceLocationThrowFromGo(t *testing.T) {
 	}
 	if frame := stack[3]; frame.funcName != "" || frame.pc != 4 {
 		t.Fatalf("Unexpected stack frame 3: %#v", frame)
+	}
+}
+
+func TestStacktraceLocationThrowNativeInTheMiddle(t *testing.T) {
+	vm := New()
+	v, err := vm.RunString(`(function f1() {
+		throw new Error("test")
+	})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var f1 func()
+	err = vm.ExportTo(v, &f1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := func() {
+		f1()
+	}
+	vm.Set("f", f)
+	_, err = vm.RunString(`
+	function main() {
+		(function noop() {})();
+		return callee();
+	}
+	function callee() {
+		return f();
+	}
+	main();
+	`)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+	stack := err.(*Exception).stack
+	if len(stack) != 5 {
+		t.Fatalf("Unexpected stack len: %v", stack)
+	}
+	if frame := stack[0]; frame.funcName != "f1" || frame.pc != 7 {
+		t.Fatalf("Unexpected stack frame 0: %#v", frame)
+	}
+	if frame := stack[1]; !strings.HasSuffix(frame.funcName.String(), "TestStacktraceLocationThrowNativeInTheMiddle.func1") {
+		t.Fatalf("Unexpected stack frame 1: %#v", frame)
+	}
+	if frame := stack[2]; frame.funcName != "callee" || frame.pc != 2 {
+		t.Fatalf("Unexpected stack frame 2: %#v", frame)
+	}
+	if frame := stack[3]; frame.funcName != "main" || frame.pc != 6 {
+		t.Fatalf("Unexpected stack frame 3: %#v", frame)
+	}
+	if frame := stack[4]; frame.funcName != "" || frame.pc != 4 {
+		t.Fatalf("Unexpected stack frame 4: %#v", frame)
 	}
 }
 
@@ -2479,7 +2676,8 @@ func TestErrorStack(t *testing.T) {
 	if (Reflect.ownKeys(err)[0] !== "stack") {
 		throw new Error("property order");
 	}
-	if (err.stack !== "Error\n\tat test.js:2:14(3)\n") {
+	const stack = err.stack;
+	if (stack !== "Error: test\n\tat test.js:2:14(3)\n") {
 		throw new Error(stack);
 	}
 	delete err.stack;
@@ -2497,6 +2695,227 @@ func TestErrorFormatSymbols(t *testing.T) {
 	if !strings.Contains(err.Error(), "something %s %f") {
 		t.Fatalf("Wrong value %q", err.Error())
 	}
+}
+
+func TestPanicPassthrough(t *testing.T) {
+	const panicString = "Test panic"
+	r := New()
+	r.Set("f", func() {
+		panic(panicString)
+	})
+	defer func() {
+		if x := recover(); x != nil {
+			if x != panicString {
+				t.Fatalf("Wrong panic value: %v", x)
+			}
+			if len(r.vm.callStack) > 0 {
+				t.Fatal("vm.callStack is not empty")
+			}
+		} else {
+			t.Fatal("No panic")
+		}
+	}()
+	_, _ = r.RunString("f()")
+	t.Fatal("Should not reach here")
+}
+
+func TestSuspendResumeRelStackLen(t *testing.T) {
+	const SCRIPT = `
+	async function f2() {
+		throw new Error("test");
+	}
+
+	async function f1() {
+		let a = [1];
+		for (let i of a) {
+			try {
+				await f2();
+			} catch {
+				return true;
+			}
+		}
+	}
+
+	async function f() {
+		let a = [1];
+		for (let i of a) {
+			return await f1();
+		}
+	}
+	return f();
+	`
+	testAsyncFunc(SCRIPT, valueTrue, t)
+}
+
+func TestSuspendResumeStacks(t *testing.T) {
+	const SCRIPT = `
+async function f1() {
+	throw new Error();
+}
+async function f() {
+  try {
+	await f1();
+  } catch {}
+}
+
+result = await f();
+	`
+	testAsyncFunc(SCRIPT, _undefined, t)
+}
+
+func TestNestedTopLevelConstructorCall(t *testing.T) {
+	r := New()
+	c := func(call ConstructorCall, rt *Runtime) *Object {
+		if _, err := rt.RunString("(5)"); err != nil {
+			panic(err)
+		}
+		return nil
+	}
+	if err := r.Set("C", c); err != nil {
+		panic(err)
+	}
+	if _, err := r.RunString("new C()"); err != nil {
+		panic(err)
+	}
+}
+
+func TestNestedTopLevelConstructorPanicAsync(t *testing.T) {
+	r := New()
+	c := func(call ConstructorCall, rt *Runtime) *Object {
+		c, ok := AssertFunction(rt.ToValue(func() {}))
+		if !ok {
+			panic("wat")
+		}
+		if _, err := c(Undefined()); err != nil {
+			panic(err)
+		}
+		return nil
+	}
+	if err := r.Set("C", c); err != nil {
+		panic(err)
+	}
+	if _, err := r.RunString("new C()"); err != nil {
+		panic(err)
+	}
+}
+
+func TestAsyncFuncThrow(t *testing.T) {
+	const SCRIPT = `
+	class TestError extends Error {
+	}
+
+	async function f() {
+		throw new TestError();
+	}
+
+	async function f1() {
+		try {
+			await f();
+		} catch (e) {
+			assert.sameValue(e.constructor.name, TestError.name);
+			return;
+		}
+		throw new Error("No exception was thrown");
+	}
+	await f1();
+	return undefined;
+	`
+	testAsyncFuncWithTestLib(SCRIPT, _undefined, t)
+}
+
+func TestAsyncStacktrace(t *testing.T) {
+	// Do not reformat, assertions depend on the line and column numbers
+	const SCRIPT = `
+	let ex;
+	async function foo(x) {
+	  await bar(x);
+	}
+
+	async function bar(x) {
+	  await x;
+	  throw new Error("Let's have a look...");
+	}
+
+	try {
+		await foo(1);
+	} catch (e) {
+		assertStack(e, [
+			["test.js", "bar", 9, 10],
+			["test.js", "foo", 4, 13],
+			["test.js", "test", 13, 12],
+		]);
+	}
+	`
+	testAsyncFuncWithTestLibX(SCRIPT, _undefined, t)
+}
+
+func TestPanicPropagation(t *testing.T) {
+	r := New()
+	r.Set("doPanic", func() {
+		panic(true)
+	})
+	v, err := r.RunString(`(function() {
+		doPanic();
+	})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := AssertFunction(v)
+	if !ok {
+		t.Fatal("not a function")
+	}
+	defer func() {
+		if x := recover(); x != nil {
+			if x != true {
+				t.Fatal("Invalid panic value")
+			}
+		}
+	}()
+	_, _ = f(nil)
+	t.Fatal("Expected panic")
+}
+
+func TestAwaitInParameters(t *testing.T) {
+	_, err := Compile("", `
+	async function g() {
+	    async function inner(a = 1 + await 1) {
+	    }
+	}
+	`, false)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func ExampleRuntime_ForOf() {
+	r := New()
+	v, err := r.RunString(`
+		new Map().set("a", 1).set("b", 2);
+	`)
+	if err != nil {
+		panic(err)
+	}
+
+	var sb strings.Builder
+	ex := r.Try(func() {
+		r.ForOf(v, func(v Value) bool {
+			o := v.ToObject(r)
+			key := o.Get("0")
+			value := o.Get("1")
+
+			sb.WriteString(key.String())
+			sb.WriteString("=")
+			sb.WriteString(value.String())
+			sb.WriteString(",")
+
+			return true
+		})
+	})
+	if ex != nil {
+		panic(ex)
+	}
+	fmt.Println(sb.String())
+	// Output: a=1,b=2,
 }
 
 /*
@@ -2550,6 +2969,26 @@ func BenchmarkCallNative(b *testing.B) {
 	}
 }
 
+func BenchmarkCallJS(b *testing.B) {
+	vm := New()
+	_, err := vm.RunString(`
+	function f() {
+		return 42;
+	}
+	`)
+
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	prg := MustCompile("test.js", "f(null)", true)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm.RunProgram(prg)
+	}
+}
+
 func BenchmarkMainLoop(b *testing.B) {
 	vm := New()
 
@@ -2580,12 +3019,12 @@ func BenchmarkStringMapGet(b *testing.B) {
 }
 
 func BenchmarkValueStringMapGet(b *testing.B) {
-	m := make(map[valueString]Value)
+	m := make(map[String]Value)
 	for i := 0; i < 100; i++ {
 		m[asciiString(strconv.Itoa(i))] = intToValue(int64(i))
 	}
 	b.ResetTimer()
-	var key valueString = asciiString("50")
+	var key String = asciiString("50")
 	for i := 0; i < b.N; i++ {
 		if m[key] == nil {
 			b.Fatal()
@@ -2604,5 +3043,12 @@ func BenchmarkAsciiStringMapGet(b *testing.B) {
 		if m[key] == nil {
 			b.Fatal()
 		}
+	}
+}
+
+func BenchmarkNew(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		New()
 	}
 }

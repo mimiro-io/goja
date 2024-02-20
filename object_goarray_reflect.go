@@ -59,29 +59,29 @@ func (c *valueArrayCache) shrink(newlen int) {
 func (o *objectGoArrayReflect) _init() {
 	o.objectGoReflect.init()
 	o.class = classArray
-	o.prototype = o.val.runtime.global.ArrayPrototype
-	o.updateLen()
+	o.prototype = o.val.runtime.getArrayPrototype()
 	o.baseObject._put("length", &o.lengthProp)
 }
 
 func (o *objectGoArrayReflect) init() {
 	o._init()
+	o.updateLen()
 	o.putIdx = o._putIdx
 }
 
 func (o *objectGoArrayReflect) updateLen() {
-	o.lengthProp.value = intToValue(int64(o.value.Len()))
+	o.lengthProp.value = intToValue(int64(o.fieldsValue.Len()))
 }
 
 func (o *objectGoArrayReflect) _hasIdx(idx valueInt) bool {
-	if idx := int64(idx); idx >= 0 && idx < int64(o.value.Len()) {
+	if idx := int64(idx); idx >= 0 && idx < int64(o.fieldsValue.Len()) {
 		return true
 	}
 	return false
 }
 
 func (o *objectGoArrayReflect) _hasStr(name unistring.String) bool {
-	if idx := strToIdx64(name); idx >= 0 && idx < int64(o.value.Len()) {
+	if idx := strToIdx64(name); idx >= 0 && idx < int64(o.fieldsValue.Len()) {
 		return true
 	}
 	return false
@@ -92,7 +92,7 @@ func (o *objectGoArrayReflect) _getIdx(idx int) Value {
 		return v.esValue()
 	}
 
-	v := o.value.Index(idx)
+	v := o.fieldsValue.Index(idx)
 
 	res, w := o.elemToValue(v)
 	if w != nil {
@@ -103,7 +103,7 @@ func (o *objectGoArrayReflect) _getIdx(idx int) Value {
 }
 
 func (o *objectGoArrayReflect) getIdx(idx valueInt, receiver Value) Value {
-	if idx := toIntStrict(int64(idx)); idx >= 0 && idx < o.value.Len() {
+	if idx := toIntStrict(int64(idx)); idx >= 0 && idx < o.fieldsValue.Len() {
 		return o._getIdx(idx)
 	}
 	return o.objectGoReflect.getStr(idx.string(), receiver)
@@ -111,9 +111,12 @@ func (o *objectGoArrayReflect) getIdx(idx valueInt, receiver Value) Value {
 
 func (o *objectGoArrayReflect) getStr(name unistring.String, receiver Value) Value {
 	var ownProp Value
-	if idx := strToGoIdx(name); idx >= 0 && idx < o.value.Len() {
+	if idx := strToGoIdx(name); idx >= 0 && idx < o.fieldsValue.Len() {
 		ownProp = o._getIdx(idx)
 	} else if name == "length" {
+		if o.fieldsValue.Kind() == reflect.Slice {
+			o.updateLen()
+		}
 		ownProp = &o.lengthProp
 	} else {
 		ownProp = o.objectGoReflect.getOwnPropStr(name)
@@ -123,7 +126,7 @@ func (o *objectGoArrayReflect) getStr(name unistring.String, receiver Value) Val
 
 func (o *objectGoArrayReflect) getOwnPropStr(name unistring.String) Value {
 	if idx := strToGoIdx(name); idx >= 0 {
-		if idx < o.value.Len() {
+		if idx < o.fieldsValue.Len() {
 			return &valueProperty{
 				value:      o._getIdx(idx),
 				writable:   true,
@@ -133,13 +136,16 @@ func (o *objectGoArrayReflect) getOwnPropStr(name unistring.String) Value {
 		return nil
 	}
 	if name == "length" {
+		if o.fieldsValue.Kind() == reflect.Slice {
+			o.updateLen()
+		}
 		return &o.lengthProp
 	}
 	return o.objectGoReflect.getOwnPropStr(name)
 }
 
 func (o *objectGoArrayReflect) getOwnPropIdx(idx valueInt) Value {
-	if idx := toIntStrict(int64(idx)); idx >= 0 && idx < o.value.Len() {
+	if idx := toIntStrict(int64(idx)); idx >= 0 && idx < o.fieldsValue.Len() {
 		return &valueProperty{
 			value:      o._getIdx(idx),
 			writable:   true,
@@ -155,7 +161,7 @@ func (o *objectGoArrayReflect) _putIdx(idx int, v Value, throw bool) bool {
 		copyReflectValueWrapper(cached)
 	}
 
-	rv := o.value.Index(idx)
+	rv := o.fieldsValue.Index(idx)
 	err := o.val.runtime.toReflectValue(v, rv, &objectExportCtx{})
 	if err != nil {
 		if cached != nil {
@@ -172,7 +178,7 @@ func (o *objectGoArrayReflect) _putIdx(idx int, v Value, throw bool) bool {
 
 func (o *objectGoArrayReflect) setOwnIdx(idx valueInt, val Value, throw bool) bool {
 	if i := toIntStrict(int64(idx)); i >= 0 {
-		if i >= o.value.Len() {
+		if i >= o.fieldsValue.Len() {
 			if res, ok := o._setForeignIdx(idx, nil, val, o.val, throw); ok {
 				return res
 			}
@@ -191,7 +197,7 @@ func (o *objectGoArrayReflect) setOwnIdx(idx valueInt, val Value, throw bool) bo
 
 func (o *objectGoArrayReflect) setOwnStr(name unistring.String, val Value, throw bool) bool {
 	if idx := strToGoIdx(name); idx >= 0 {
-		if idx >= o.value.Len() {
+		if idx >= o.fieldsValue.Len() {
 			if res, ok := o._setForeignStr(name, nil, val, o.val, throw); ok {
 				return res
 			}
@@ -223,7 +229,7 @@ func (o *objectGoArrayReflect) hasOwnPropertyStr(name unistring.String) bool {
 	if o._hasStr(name) || name == "length" {
 		return true
 	}
-	return o.objectGoReflect._has(name.String())
+	return o.objectGoReflect.hasOwnPropertyStr(name)
 }
 
 func (o *objectGoArrayReflect) defineOwnPropertyIdx(idx valueInt, descr PropertyDescriptor, throw bool) bool {
@@ -256,28 +262,14 @@ func (o *objectGoArrayReflect) defineOwnPropertyStr(name unistring.String, descr
 	return false
 }
 
-func (o *objectGoArrayReflect) toPrimitiveNumber() Value {
-	return o.toPrimitiveString()
-}
-
-func (o *objectGoArrayReflect) toPrimitiveString() Value {
-	return o.val.runtime.arrayproto_join(FunctionCall{
-		This: o.val,
-	})
-}
-
-func (o *objectGoArrayReflect) toPrimitive() Value {
-	return o.toPrimitiveString()
-}
-
 func (o *objectGoArrayReflect) _deleteIdx(idx int) {
-	if idx < o.value.Len() {
+	if idx < o.fieldsValue.Len() {
 		if cv := o.valueCache.get(idx); cv != nil {
 			copyReflectValueWrapper(cv)
 			o.valueCache[idx] = nil
 		}
 
-		o.value.Index(idx).Set(reflect.Zero(o.value.Type().Elem()))
+		o.fieldsValue.Index(idx).Set(reflect.Zero(o.fieldsValue.Type().Elem()))
 	}
 }
 
@@ -304,7 +296,7 @@ type goArrayReflectPropIter struct {
 }
 
 func (i *goArrayReflectPropIter) next() (propIterItem, iterNextFunc) {
-	if i.idx < i.limit && i.idx < i.o.value.Len() {
+	if i.idx < i.limit && i.idx < i.o.fieldsValue.Len() {
 		name := strconv.Itoa(i.idx)
 		i.idx++
 		return propIterItem{name: asciiString(name), enumerable: _ENUM_TRUE}, i.next
@@ -314,7 +306,7 @@ func (i *goArrayReflectPropIter) next() (propIterItem, iterNextFunc) {
 }
 
 func (o *objectGoArrayReflect) stringKeys(all bool, accum []Value) []Value {
-	for i := 0; i < o.value.Len(); i++ {
+	for i := 0; i < o.fieldsValue.Len(); i++ {
 		accum = append(accum, asciiString(strconv.Itoa(i)))
 	}
 
@@ -324,12 +316,12 @@ func (o *objectGoArrayReflect) stringKeys(all bool, accum []Value) []Value {
 func (o *objectGoArrayReflect) iterateStringKeys() iterNextFunc {
 	return (&goArrayReflectPropIter{
 		o:     o,
-		limit: o.value.Len(),
+		limit: o.fieldsValue.Len(),
 	}).next
 }
 
 func (o *objectGoArrayReflect) sortLen() int {
-	return o.value.Len()
+	return o.fieldsValue.Len()
 }
 
 func (o *objectGoArrayReflect) sortGet(i int) Value {
@@ -337,9 +329,9 @@ func (o *objectGoArrayReflect) sortGet(i int) Value {
 }
 
 func (o *objectGoArrayReflect) swap(i int, j int) {
-	vi := o.value.Index(i)
-	vj := o.value.Index(j)
-	tmp := reflect.New(o.value.Type().Elem()).Elem()
+	vi := o.fieldsValue.Index(i)
+	vj := o.fieldsValue.Index(j)
+	tmp := reflect.New(o.fieldsValue.Type().Elem()).Elem()
 	tmp.Set(vi)
 	vi.Set(vj)
 	vj.Set(tmp)

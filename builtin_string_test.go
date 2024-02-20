@@ -190,7 +190,7 @@ if (result.value !== pair) {
 func TestValueStringBuilder(t *testing.T) {
 	t.Run("substringASCII", func(t *testing.T) {
 		t.Parallel()
-		var sb valueStringBuilder
+		var sb StringBuilder
 		str := newStringValue("a\U00010000b")
 		sb.WriteSubstring(str, 0, 1)
 		res := sb.String()
@@ -201,7 +201,7 @@ func TestValueStringBuilder(t *testing.T) {
 
 	t.Run("substringASCIIPure", func(t *testing.T) {
 		t.Parallel()
-		var sb valueStringBuilder
+		var sb StringBuilder
 		str := newStringValue("ab")
 		sb.WriteSubstring(str, 0, 1)
 		res := sb.String()
@@ -212,7 +212,7 @@ func TestValueStringBuilder(t *testing.T) {
 
 	t.Run("substringUnicode", func(t *testing.T) {
 		t.Parallel()
-		var sb valueStringBuilder
+		var sb StringBuilder
 		str := newStringValue("a\U00010000b")
 		sb.WriteSubstring(str, 1, 3)
 		res := sb.String()
@@ -223,7 +223,7 @@ func TestValueStringBuilder(t *testing.T) {
 
 	t.Run("substringASCIIUnicode", func(t *testing.T) {
 		t.Parallel()
-		var sb valueStringBuilder
+		var sb StringBuilder
 		str := newStringValue("a\U00010000b")
 		sb.WriteSubstring(str, 0, 2)
 		res := sb.String()
@@ -234,7 +234,7 @@ func TestValueStringBuilder(t *testing.T) {
 
 	t.Run("substringUnicodeASCII", func(t *testing.T) {
 		t.Parallel()
-		var sb valueStringBuilder
+		var sb StringBuilder
 		str := newStringValue("a\U00010000b")
 		sb.WriteSubstring(str, 2, 4)
 		res := sb.String()
@@ -245,11 +245,34 @@ func TestValueStringBuilder(t *testing.T) {
 
 	t.Run("concatSubstringUnicodeASCII", func(t *testing.T) {
 		t.Parallel()
-		var sb valueStringBuilder
+		var sb StringBuilder
 		sb.WriteString(newStringValue("юникод"))
 		sb.WriteSubstring(asciiString(" ascii"), 0, 6)
 		if res := sb.String(); !res.SameAs(newStringValue("юникод ascii")) {
 			t.Fatal(res)
 		}
 	})
+
+	t.Run("concat_ASCII_importedASCII", func(t *testing.T) {
+		t.Parallel()
+		var sb StringBuilder
+		sb.WriteString(asciiString("ascii"))
+		sb.WriteString(&importedString{s: " imported_ascii1234567890"})
+		s := sb.String()
+		if res, ok := s.(asciiString); !ok || res != "ascii imported_ascii1234567890" {
+			t.Fatal(s)
+		}
+	})
+
+	t.Run("concat_ASCII_importedUnicode", func(t *testing.T) {
+		t.Parallel()
+		var sb StringBuilder
+		sb.WriteString(asciiString("ascii"))
+		sb.WriteString(&importedString{s: " imported_юникод"})
+		s := sb.String()
+		if res, ok := s.(unicodeString); !ok || !res.SameAs(newStringValue("ascii imported_юникод")) {
+			t.Fatal(s)
+		}
+	})
+
 }

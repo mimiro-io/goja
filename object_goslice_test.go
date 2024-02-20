@@ -258,3 +258,41 @@ func TestGoSliceSort(t *testing.T) {
 		t.Fatalf("val: %v", s)
 	}
 }
+
+func TestGoSliceToString(t *testing.T) {
+	vm := New()
+	s := []interface{}{4, 2, 3}
+	vm.Set("s", &s)
+	res, err := vm.RunString("`${s}`")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp := res.Export(); exp != "4,2,3" {
+		t.Fatal(exp)
+	}
+}
+
+func TestGoSliceExternalLenUpdate(t *testing.T) {
+	data := &[]interface{}{1}
+
+	vm := New()
+	vm.Set("data", data)
+	vm.Set("append", func(a *[]interface{}, v int) {
+		if a != data {
+			panic(vm.NewTypeError("a != data"))
+		}
+		*a = append(*a, v)
+	})
+
+	vm.testScriptWithTestLib(`
+		assert.sameValue(data.length, 1);
+
+        // modify with js
+        data.push(1);
+		assert.sameValue(data.length, 2);
+
+        // modify with go
+        append(data, 2);
+		assert.sameValue(data.length, 3);
+    `, _undefined, t)
+}

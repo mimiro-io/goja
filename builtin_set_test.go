@@ -100,3 +100,81 @@ func TestSetExportToArrayMismatchedLengths(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestSetExportToNilMap(t *testing.T) {
+	vm := New()
+	var m map[int]interface{}
+	res, err := vm.RunString("new Set([1])")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = vm.ExportTo(res, &m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 1 {
+		t.Fatal(m)
+	}
+	if _, exists := m[1]; !exists {
+		t.Fatal(m)
+	}
+}
+
+func TestSetExportToNonNilMap(t *testing.T) {
+	vm := New()
+	m := map[int]interface{}{
+		2: true,
+	}
+	res, err := vm.RunString("new Set([1])")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = vm.ExportTo(res, &m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 1 {
+		t.Fatal(m)
+	}
+	if _, exists := m[1]; !exists {
+		t.Fatal(m)
+	}
+}
+
+func TestSetGetAdderGetIteratorOrder(t *testing.T) {
+	const SCRIPT = `
+	let getterCalled = 0;
+
+	class S extends Set {
+	    get add() {
+	        getterCalled++;
+	        return null;
+	    }
+	}
+
+	let getIteratorCalled = 0;
+
+	let iterable = {};
+	iterable[Symbol.iterator] = () => {
+	    getIteratorCalled++
+	    return {
+	        next: 1
+	    };
+	}
+
+	let thrown = false;
+
+	try {
+	    new S(iterable);
+	} catch (e) {
+	    if (e instanceof TypeError) {
+	        thrown = true;
+	    } else {
+	        throw e;
+	    }
+	}
+
+	thrown && getterCalled === 1 && getIteratorCalled === 0;
+	`
+	testScript(SCRIPT, valueTrue, t)
+}
