@@ -1,0 +1,49 @@
+name: release
+on:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v4
+
+      - name: Prepare branch
+        id: branch-new
+        run: |
+          git config --local committer.email "noreply@github.com"
+          git config --local committer.name "GitHub"
+          git config --local author.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local author.name "github-actions[bot]"
+          git fetch -q
+          B=$GITHUB_SHA-RELEASE
+          git branch -D $B || true
+          git checkout -b $B
+          echo "B=$B" >> $GITHUB_OUTPUT
+
+      - name: patch imports
+        id: patch-imports
+        run: |
+          files=$(grep -rl "dop251/goja")
+          for file in $files; do
+            if [[ $file == *.go ]]; then
+              sed -i 's/dop251\/goja/mimiro-io\/goja/g' $file
+            fi
+          done
+
+      - name: Push change branch
+        id: branch-push
+        run: |
+          git add .
+          git status
+          git commit -m "patched imports [CI]"
+          git push origin ${{ steps.branch-new.outputs.B }} -f
+
+      - name: Move release tag to branch head
+        id: retag
+        run: |
+          RELEASE_VERSION=${GITHUB_REF#refs/*/}
+          git tag $RELEASE_VERSION
+          git push origin $RELEASE_VERSION
