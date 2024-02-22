@@ -45,5 +45,5 @@ jobs:
         id: retag
         run: |
           RELEASE_VERSION=${GITHUB_REF#refs/*/}
-          git tag $RELEASE_VERSION
-          git push --force origin $RELEASE_VERSION
+          git tag -f $RELEASE_VERSION
+          git push -f origin $RELEASE_VERSION
