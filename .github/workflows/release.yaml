@@ -29,9 +29,12 @@ jobs:
           files=$(grep -rl "dop251/goja")
           for file in $files; do
             if [[ $file == *.go ]]; then
+              sed -i 's/dop251\/goja_/nop251\/goja_/g' $file
               sed -i 's/dop251\/goja/mimiro-io\/goja/g' $file
+              sed -i 's/nop251\/goja_/dop251\/goja_/g' $file
             fi
           done
+          sed -i 's/module\ github\.com\/dop251\/goja/module github.com\/mimiro-io\/goja/g' go.mod
 
       - name: Push change branch
         id: branch-push
