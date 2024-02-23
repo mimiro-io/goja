@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/dop251/goja/unistring"
+	"github.com/mimiro-io/goja/unistring"
 )
 
 const (
