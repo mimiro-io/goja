@@ -3,9 +3,9 @@ package parser
 import (
 	"testing"
 
-	"github.com/dop251/goja/file"
-	"github.com/dop251/goja/token"
-	"github.com/dop251/goja/unistring"
+	"github.com/mimiro-io/goja/file"
+	"github.com/mimiro-io/goja/token"
+	"github.com/mimiro-io/goja/unistring"
 )
 
 func TestLexer(t *testing.T) {
